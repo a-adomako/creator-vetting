@@ -1,0 +1,52 @@
+# ── Secrets and env ───────────────────────────────────────────────────────────
+.env
+.env.local
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+.Python
+
+# ── macOS junk ───────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ── IDE / editor cruft ────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Working dirs the pipeline writes to ───────────────────────────────────────
+# Reel videos are downloaded here and should be auto-deleted per creator. Keep
+# the directory itself (via .gitkeep) but never commit downloaded videos.
+temp/*.mp4
+
+# ── Pipeline outputs ──────────────────────────────────────────────────────────
+# Enriched CSVs and per-creator JSON profiles are generated artefacts. The
+# folder structure is kept via .gitkeep files; the contents are not committed.
+output/enriched_*.csv
+output/profiles/*.json
+output/creators.db
+output/shortlists/*.csv
+output/queued/*.csv
+output/campaigns/
+
+# Temporary UI-generated config (Vet Creators page writes this for each run)
+config/_ui_config.yaml
+
+# ── Archive folder ───────────────────────────────────────────────────────────
+# The to-archive/ folder itself is committed (README explains its purpose),
+# but new contents added later don't need to be tracked individually.
+to-archive/**/*.mp4
+to-archive/**/*.csv
+to-archive/**/*.xlsx
+to-archive/**/*.docx
+
+# ── Streamlit cache ──────────────────────────────────────────────────────────
+.streamlit/cache/

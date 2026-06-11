@@ -1,0 +1,37 @@
+# CreatorVetter dependencies
+# Install with: pip install -r requirements.txt
+#
+# System requirement (install separately):
+#   ffmpeg — https://ffmpeg.org/download.html
+#   Windows: winget install ffmpeg  OR  choco install ffmpeg
+
+# Instagram data
+# (using Modash Raw API via requests)
+
+# Local transcription (no API cost)
+faster-whisper>=1.0.0
+
+# Visual analysis (no API cost)
+open-clip-torch>=2.24.0
+torch>=2.0.0
+opencv-python>=4.9.0
+Pillow>=10.0.0
+
+# Data processing
+pandas>=2.0.0
+
+# Config and environment
+pyyaml>=6.0
+python-dotenv>=1.0.0
+
+# Progress display
+tqdm>=4.66.0
+
+# HTTP downloads
+requests>=2.31.0
+
+# Conversational selection agent
+anthropic>=0.25.0
+
+# Streamlit UI
+streamlit>=1.35.0

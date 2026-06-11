@@ -1,0 +1,397 @@
+# CreatorVetter Configuration
+# Edit this file to tune thresholds, niche definitions, and column names.
+# No code changes needed — everything reads from here.
+
+# ─────────────────────────────────────────────
+# INPUT CSV COLUMN NAMES
+# ─────────────────────────────────────────────
+input_columns:
+  url: "Profile URL"    # Column containing Instagram profile URL (or null)
+  username: "Username"  # Column containing plain username / @handle (or null)
+  # All other columns are preserved in the output as-is
+
+# ─────────────────────────────────────────────
+# MODASH RAW API SETTINGS
+# ─────────────────────────────────────────────
+modash:
+  base_url: "https://api.modash.io/v1"
+  reels_per_creator: 7      # Max reels to download and analyze per creator
+  requests_per_second: 2    # Rate limit for API requests
+
+# ─────────────────────────────────────────────
+# WHISPER TRANSCRIPTION
+# ─────────────────────────────────────────────
+whisper:
+  model_size: "tiny"       # Options: tiny, base, small, medium, large
+                           # tiny  = fastest, less accurate (~5s/reel on CPU)
+                           # base  = good balance (~15s/reel on CPU)
+                           # small = more accurate (~30s/reel on CPU)
+  language: null           # null = auto-detect, or set "en" to force English
+  device: "auto"           # auto = use GPU if available, else CPU
+
+# ─────────────────────────────────────────────
+# CLIP VISUAL ANALYSIS
+# ─────────────────────────────────────────────
+clip:
+  model: "ViT-B-32"
+  pretrained: "openai"
+  frames_per_second: 0.5   # Extract 1 frame every 2 seconds
+
+# CLIP zero-shot prompts per niche.
+# Each niche gets a list of text descriptions — CLIP scores each frame
+# against all prompts and averages the confidence. Add/edit prompts here
+# to tune classification accuracy for your specific content types.
+clip_prompts:
+  "Health & Wellness":
+    - "person meditating or doing yoga"
+    - "healthy meal preparation"
+    - "wellness morning routine"
+    - "vitamins and supplements"
+    - "mental health self care"
+    - "herbal tea and relaxation"
+    - "juice cleanse or smoothie"
+
+  "Fitness":
+    - "gym workout exercise"
+    - "weight training lifting weights"
+    - "running jogging outdoors"
+    - "home workout exercise"
+    - "protein shake post workout"
+    - "athletic sportswear workout clothes"
+    - "personal trainer coaching"
+    - "HIIT cardio exercise"
+
+  "Fashion":
+    - "fashion outfit of the day"
+    - "clothing haul try on"
+    - "stylish outfit look"
+    - "shopping bags clothing store"
+    - "model posing in clothes"
+    - "accessories jewellery handbag"
+    - "streetwear fashion style"
+
+  "Lifestyle":
+    - "daily vlog lifestyle content"
+    - "morning routine at home"
+    - "home decor interior design"
+    - "travel destination photography"
+    - "coffee shop aesthetic"
+    - "productivity work from home"
+    - "cooking at home kitchen"
+
+  "Beauty & Skincare":
+    - "makeup tutorial beauty routine"
+    - "skincare routine products"
+    - "foundation lipstick cosmetics"
+    - "before and after skincare"
+    - "hair styling tutorial"
+    - "nail art manicure"
+
+  "Food & Beverage":
+    - "food recipe cooking"
+    - "restaurant meal dining"
+    - "baking dessert cake"
+    - "street food tasting"
+    - "coffee barista drink"
+    - "wine cocktail beverage"
+
+# ─────────────────────────────────────────────
+# NICHE KEYWORDS (for transcript scoring)
+# ─────────────────────────────────────────────
+# Words/phrases spoken in transcripts that signal each niche.
+# Case-insensitive. Multi-word phrases supported.
+niche_keywords:
+  "Health & Wellness":
+    - wellness
+    - meditation
+    - mindfulness
+    - gut health
+    - supplements
+    - detox
+    - holistic
+    - anxiety
+    - mental health
+    - self care
+    - immune
+    - inflammation
+    - sleep routine
+    - vitamins
+
+  "Fitness":
+    - workout
+    - gym
+    - exercise
+    - reps
+    - sets
+    - protein
+    - gains
+    - cardio
+    - lifting
+    - squat
+    - deadlift
+    - calories
+    - macros
+    - training
+    - personal trainer
+    - HIIT
+    - shred
+
+  "Fashion":
+    - outfit
+    - look
+    - style
+    - haul
+    - trend
+    - brand
+    - collection
+    - designer
+    - clothing
+    - accessories
+    - streetwear
+    - thrift
+    - wardrobe
+
+  "Lifestyle":
+    - routine
+    - vlog
+    - day in my life
+    - productivity
+    - morning routine
+    - travel
+    - aesthetic
+    - apartment
+    - decor
+    - coffee
+    - work from home
+
+  "Beauty & Skincare":
+    - skincare
+    - makeup
+    - foundation
+    - moisturizer
+    - serum
+    - SPF
+    - routine
+    - tutorial
+    - glow
+    - acne
+    - hair
+    - nails
+    - beauty
+
+  "Food & Beverage":
+    - recipe
+    - cooking
+    - restaurant
+    - baking
+    - meal prep
+    - ingredients
+    - taste
+    - flavour
+    - cuisine
+    - food review
+
+# ─────────────────────────────────────────────
+# NICHE FUSION WEIGHTS
+# ─────────────────────────────────────────────
+# How to combine visual (CLIP) and transcript signals.
+# Must sum to 1.0
+analysis_weights:
+  visual: 0.6
+  transcript: 0.4
+
+# Which niches are your primary target verticals (for brand_fit_score)
+target_niches:
+  - "Health & Wellness"
+  - "Fitness"
+  - "Fashion"
+  - "Lifestyle"
+
+# ─────────────────────────────────────────────
+# ENGAGEMENT THRESHOLDS (as % rates)
+# ─────────────────────────────────────────────
+engagement_thresholds:
+  excellent: 6.0    # >= 6% engagement rate
+  good: 3.0         # >= 3%
+  average: 1.0      # >= 1%
+  # below 1% = poor
+
+# ─────────────────────────────────────────────
+# POSTING FREQUENCY (posts per 30 days)
+# ─────────────────────────────────────────────
+frequency_thresholds:
+  active: 8         # >= 8 posts/month
+  occasional: 3     # >= 3 posts/month
+  # below 3 = inactive
+
+# Days since last post before flagging as stale
+recency_flag_days: 30
+
+# ─────────────────────────────────────────────
+# SCORING WEIGHTS (must sum to 1.0)
+# ─────────────────────────────────────────────
+quality_weights:
+  engagement_rate: 0.40
+  audience_quality: 0.30
+  posting_frequency: 0.20
+  recency: 0.10
+
+# ─────────────────────────────────────────────
+# TIER THRESHOLDS (based on overall_quality_score 0–100)
+# ─────────────────────────────────────────────
+tier_thresholds:
+  A: 75
+  B: 50
+  C: 25
+  # below 25 = D
+
+# ─────────────────────────────────────────────
+# LLM ANALYSIS (optional — requires ANTHROPIC_API_KEY)
+# Runs after CLIP + keyword analysis. Adds llm_* columns to the output CSV.
+# Set enabled: false to skip (no API calls, no cost).
+# ─────────────────────────────────────────────
+llm_analysis:
+  enabled: true
+  brand_context: >
+    Health, wellness, and lifestyle brands targeting women 25–45.
+    Looking for authentic creators in beauty, fitness, nutrition,
+    collagen, skincare, and healthy living who genuinely use and
+    believe in the products they promote.
+  target_niches:
+    - "Health & Wellness"
+    - "Fitness"
+    - "Beauty & Skincare"
+    - "Lifestyle"
+    - "Food & Beverage"
+
+# ─────────────────────────────────────────────
+# QUALITY GATE
+# Universal disqualifiers — creators tripping ANY of these are NOT pushed
+# to the central agency database, even if their brand_fit is high for the
+# current client. The rule of thumb: a fail here means this creator is wrong
+# for ANY Augmentum client, not just this one.
+#
+# Brand-fit mismatches (wrong niche, wrong size, wrong demographic) are
+# client-specific and recorded in the vetting result without blocking
+# central-DB entry — a creator wrong for Kloris may be right for Elavate.
+#
+# Outputs three new columns on every enriched row:
+#   gate_decision  — "passes" | "rejected_<category>"
+#   gate_reason    — human-readable explanation
+#   push_to_spine  — boolean
+# ─────────────────────────────────────────────
+quality_gate:
+  enabled: true
+
+  # llm_brand_safety below this triggers a universal reject even without a
+  # specific keyword match — Claude saw something we didn't enumerate.
+  min_brand_safety_floor: 30
+
+  # llm_recommendation values that trigger a universal reject. By default
+  # we DON'T put "no" here — "no" is often client-specific brand-fit, not
+  # universal disqualification. A creator can be "no for Kloris" and "yes
+  # for Elavate". Only put unambiguous-disqualifier signals here.
+  exclude_recommendations: []
+
+  # Pattern dictionaries — case-insensitive substring match against
+  # llm_concerns + llm_reasoning + llm_content_summary + transcript_sample +
+  # detected_scenes. Any hit in any category triggers a universal reject.
+  #
+  # These map directly to the "Hard Reject" rows in knowledge/expertise.md.
+  # Soft rejects (extreme diet culture, partisan politics, etc.) are
+  # client-overridable and don't belong here.
+  universal_reject_patterns:
+    adult_sexual_content:
+      - "onlyfans"
+      - "fansly"
+      - "fanvue"
+      - "justforfans"
+      - "manyvids"
+      - "explicit sexual"
+      - "explicit nudity"
+      - "visible genitalia"
+      - "sex work"
+      - "adult content platform"
+      - "subscription adult"
+      - "thirst trap"
+      - "NSFW"
+      - "spicy content"
+      - "18+ content"
+
+    mlm:
+      - "MLM"
+      - "multi-level marketing"
+      - "Herbalife"
+      - "Arbonne"
+      - "Optavia"
+      - "Modere"
+      - "Beachbody"
+      - "Amway"
+      - "Plexus"
+      - "Isagenix"
+      - "Young Living distributor"
+      - "doTERRA distributor"
+
+    eating_disorder_advocacy:
+      - "pro-eating-disorder"
+      - "pro-ana"
+      - "pro-mia"
+      - "disordered eating advocacy"
+      - "anorexia advocacy"
+      - "bulimia advocacy"
+      - "thinspiration"
+
+    pseudo_medical:
+      - "cancer cure"
+      - "miracle cure"
+      - "anti-chemotherapy"
+      - "pseudo-medical claim"
+      - "cure-all protocol"
+      - "natural cancer treatment"
+
+    anti_medical_advocacy:
+      - "anti-vaccine"
+      - "anti-vax"
+      - "anti-psychiatry"
+      - "anti-medication"
+      - "vaccine conspiracy"
+      - "vaccines cause autism"
+
+    political_extremism:
+      - "white nationalist"
+      - "neo-nazi"
+      - "QAnon"
+      - "election denial"
+      - "deep state"
+      - "great replacement"
+      - "accelerationist"
+
+    hate_speech:
+      - "hate speech"
+      - "racial slur"
+      - "antisemitic"
+      - "homophobic content"
+      - "transphobic content"
+      - "ableist content"
+
+    harassment_illegal:
+      - "doxxing"
+      - "harassment campaign"
+      - "active harassment"
+      - "illegal drug sale"
+
+    religious_extremism:
+      - "religious extremism"
+      - "religious fundamentalism"
+      - "anti-LGBTQ religious content"
+      - "evangelical condemnation"
+
+  # Soft floors — used in addition to the keyword patterns. If a row has all
+  # of: llm_brand_safety < soft_floor AND tier == "D" AND llm_recommendation == "no",
+  # we treat it as a universal reject even without a keyword match (a creator
+  # that bad on every dimension probably has something we didn't enumerate).
+  multi_signal_floor:
+    enabled: true
+    brand_safety_below: 50
+    require_tier_d: true
+    require_no_recommendation: true

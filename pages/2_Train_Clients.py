@@ -82,10 +82,11 @@ def save_profile(client_name: str, profile: dict) -> None:
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
 
-tab1, tab2, tab3 = st.tabs([
+tab1, tab2, tab3, tab4 = st.tabs([
     "Your clients (list, create, delete)",
     "Brand context & target niches (per-client briefing)",
     "Your personal scoring style (how you'd judge for them)",
+    "Evidence & sources (upload or fetch, then distill)",
 ])
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -143,9 +144,8 @@ with tab1:
                         key=f"activate_{cname}",
                         use_container_width=True,
                         help=(
-                            f"Make {cname} the active client (the sidebar "
-                            f"selector reflects this). The Build Shortlist "
-                            f"page defaults to the active client."
+                            f"Make {cname} the active client — the one this "
+                            f"page edits by default."
                         ),
                     ):
                         st.session_state["active_client"] = cname
@@ -252,8 +252,8 @@ with tab2:
         st.markdown(
             f'<div style="margin:1.5rem 0 1.25rem;">'
             f'<span style="font-size:0.75rem;font-weight:600;letter-spacing:0.08em;'
-            f'text-transform:uppercase;color:#5A5A60;">Editing brand context for: </span>'
-            f'<span style="font-size:0.9375rem;font-weight:700;color:#FF1F8E;">{active}</span>'
+            f'text-transform:uppercase;color:#686b87;">Editing brand context for: </span>'
+            f'<span style="font-size:0.9375rem;font-weight:700;color:#ff007e;">{active}</span>'
             f'</div>',
             unsafe_allow_html=True,
         )
@@ -380,8 +380,8 @@ with tab3:
         st.markdown(
             f'<div style="margin:1.5rem 0 1rem;">'
             f'<span style="font-size:0.75rem;font-weight:600;letter-spacing:0.08em;'
-            f'text-transform:uppercase;color:#5A5A60;">Editing personal scoring style for: </span>'
-            f'<span style="font-size:0.9375rem;font-weight:700;color:#FF1F8E;">{active}</span>'
+            f'text-transform:uppercase;color:#686b87;">Editing personal scoring style for: </span>'
+            f'<span style="font-size:0.9375rem;font-weight:700;color:#ff007e;">{active}</span>'
             f'</div>',
             unsafe_allow_html=True,
         )
@@ -393,7 +393,7 @@ with tab3:
 
         st.markdown("""
         <div class="style-guide-wrap">
-          <div style="font-size:0.875rem;font-weight:600;color:#1D1D1F;margin-bottom:0.75rem;">
+          <div style="font-size:0.875rem;font-weight:600;color:#030937;margin-bottom:0.75rem;">
             Think of this as your personal brief to Claude. Write how you actually
             evaluate creators for this client — the more specific you are about
             what you weigh and why, the more Claude's picks will match yours.
@@ -463,31 +463,163 @@ with tab3:
 
         if existing_style:
             st.markdown(
-                '<p style="font-size:0.75rem;color:#5A5A60;margin-top:0.5rem;">'
+                '<p style="font-size:0.75rem;color:#686b87;margin-top:0.5rem;">'
                 'The content shown above is the current saved version. Edit in '
                 'place and click <strong>Save</strong>.'
                 '</p>',
                 unsafe_allow_html=True,
             )
 
+# ════════════════════════════════════════════════════════════════════════════
+# TAB 4 — Evidence & sources (upload / fetch / distill)
+# ════════════════════════════════════════════════════════════════════════════
+
+with tab4:
+    active = st.session_state.get("active_client")
+    clients = list_clients()
+
+    if not clients:
+        st.info("Create a client on the **Your clients** tab first.")
+    elif not active or active not in clients:
+        st.warning(
+            "No client is set as active. Open the **Your clients** tab and "
+            "click **Set as active** on the one you want to train."
+        )
+    else:
+        from src.evidence import (
+            append_to_style, distill, evidence_dir, fetch_fathom_transcripts,
+            fetch_slack_channel_text, fetch_website_text, read_evidence_text,
+            save_upload,
+        )
+
+        client_dir = get_client_dir(active)
+        ev_dir = evidence_dir(client_dir)
+
+        st.markdown(
+            f'<div style="margin:1.5rem 0 0.5rem;">'
+            f'<span style="font-size:0.75rem;font-weight:600;letter-spacing:0.08em;'
+            f'text-transform:uppercase;color:#686b87;">Evidence pool for: </span>'
+            f'<span style="font-size:0.9375rem;font-weight:700;color:#ff007e;">{active}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        st.caption(
+            "Drop in everything you have, or let Claude go fetch it. Raw "
+            "evidence is stored for provenance — only the distilled rules "
+            "(which you confirm) enter the judgment prompts."
+        )
+
+        # ── Upload ──────────────────────────────────────────────────
+        st.markdown('<div class="section-label">Upload what you have</div>',
+                    unsafe_allow_html=True)
+        uploads = st.file_uploader(
+            "Decks, briefs, call notes, vetting sheets (txt, md, csv, yaml, json, pdf)",
+            type=["txt", "md", "csv", "yaml", "yml", "json", "pdf"],
+            accept_multiple_files=True,
+            key="evidence_uploads",
+        )
+        if uploads:
+            for up in uploads:
+                dest = save_upload(client_dir, up.name, up.getvalue())
+            st.success(f"Saved {len(uploads)} file(s) to the evidence pool.")
+
+        # ── Fetch ───────────────────────────────────────────────────
+        st.markdown('<div class="section-label">Or let Claude go fetch it</div>',
+                    unsafe_allow_html=True)
+        f1, f2, f3 = st.columns(3)
+        with f1:
+            site_url = st.text_input("Brand website URL", key="ev_site_url",
+                                     placeholder="thrivin.co.uk")
+            if st.button("Fetch website", use_container_width=True) and site_url:
+                with st.spinner("Reading the site…"):
+                    try:
+                        text = fetch_website_text(site_url)
+                        path = ev_dir / f"website_{site_url.replace('https://','').replace('/','_')[:40]}.txt"
+                        path.write_text(text, encoding="utf-8")
+                        st.success(f"Saved {len(text):,} chars of site text.")
+                    except Exception as e:
+                        st.error(f"Fetch failed: {e}")
+        with f2:
+            slack_ch = st.text_input("Slack channel", key="ev_slack_ch",
+                                     placeholder=f"internal-{active.lower().split('-')[0]}")
+            if st.button("Fetch Slack history", use_container_width=True) and slack_ch:
+                with st.spinner("Reading Slack…"):
+                    text = fetch_slack_channel_text(slack_ch)
+                    if text.startswith("["):
+                        st.error(text)
+                    else:
+                        (ev_dir / f"slack_{slack_ch.lstrip('#')}.txt").write_text(
+                            text, encoding="utf-8")
+                        st.success(f"Saved {len(text):,} chars of channel history.")
+        with f3:
+            st.text_input("Fathom meetings mentioning", value=active.split("-")[0],
+                          key="ev_fathom_needle")
+            if st.button("Fetch call transcripts", use_container_width=True):
+                with st.spinner("Searching Fathom…"):
+                    text = fetch_fathom_transcripts(
+                        st.session_state.get("ev_fathom_needle", active))
+                    if text.startswith("["):
+                        st.error(text)
+                    else:
+                        (ev_dir / "fathom_transcripts.txt").write_text(
+                            text, encoding="utf-8")
+                        st.success(f"Saved {len(text):,} chars of transcripts.")
+
+        # ── Evidence pool + distill ─────────────────────────────────
+        st.markdown('<div class="section-label">Evidence pool → distill into the brief</div>',
+                    unsafe_allow_html=True)
+        ev_files = sorted(f for f in ev_dir.iterdir() if f.is_file())
+        if not ev_files:
+            st.caption("Nothing in the pool yet — upload or fetch above.")
+        else:
+            chosen = st.multiselect(
+                "Pick evidence to distill",
+                options=ev_files,
+                format_func=lambda f: f"{f.name} ({f.stat().st_size:,} bytes)",
+                key="ev_chosen",
+            )
+            if st.button("Distill into vetting rules (one AI pass, you confirm before it lands)",
+                         type="primary", disabled=not chosen):
+                drafts = []
+                with st.spinner("Extracting judgment rules…"):
+                    for f in chosen:
+                        text = read_evidence_text(f)
+                        if text.startswith("["):
+                            st.warning(f"{f.name}: {text}")
+                            continue
+                        out = distill(active, f.name, text)
+                        if out and "NO_VETTING_SIGNAL" not in out:
+                            drafts.append((f.name, out))
+                        else:
+                            st.info(f"{f.name}: no vetting-relevant signal found.")
+                if drafts:
+                    st.session_state["ev_drafts"] = drafts
+
+            for idx, (src, draft) in enumerate(st.session_state.get("ev_drafts", [])):
+                with st.expander(f"Draft rules from {src}", expanded=True):
+                    edited = st.text_area(
+                        "Edit before confirming", value=draft, height=260,
+                        key=f"ev_draft_{idx}",
+                    )
+                    if st.button(f"Confirm — append to {active}'s scoring style",
+                                 key=f"ev_confirm_{idx}", type="primary"):
+                        append_to_style(client_dir, src, edited)
+                        st.success(
+                            "Added to my_style.md — every future judgment for "
+                            "this client now sees it. Re-sync to the spine "
+                            "when ready (sync_brand_context_to_spine.py)."
+                        )
+
 # ── Navigation footer ───────────────────────────────────────────────────────
 
 st.markdown('<div style="height:2.5rem;"></div>', unsafe_allow_html=True)
 st.markdown("""
-<div style="border-top:1px solid #E5E5EA;padding-top:1.25rem;">
-  <span style="font-size:0.75rem;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#5A5A60;">Go to</span>
+<div style="border-top:1px solid #e2e5f0;padding-top:1.25rem;">
+  <span style="font-size:0.75rem;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#686b87;">Go to</span>
 </div>
 """, unsafe_allow_html=True)
-_tf1, _tf2 = st.columns(2)
-with _tf1:
-    st.page_link(
-        "pages/1_Vet_Creators.py",
-        label="Vet Creators — run the pipeline on a new CSV",
-        icon="▶",
-    )
-with _tf2:
-    st.page_link(
-        "pages/2_Build_Shortlist.py",
-        label="Build Shortlist — filter the latest CSV against this client",
-        icon="🎯",
-    )
+st.page_link(
+    "pages/1_Vet_for_Campaign.py",
+    label="Vet for Campaign — run a CSV against a campaign spec",
+    icon="▶",
+)

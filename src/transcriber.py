@@ -115,12 +115,31 @@ class Transcriber:
         Returns empty string if ffmpeg is missing, model failed to load,
         or transcription encounters an error.
         """
+        return self.transcribe_detailed(video_path)["text"]
+
+    def transcribe_detailed(self, video_path: Path) -> dict:
+        """
+        Transcribe with quality signals attached.
+
+        Returns:
+            text            str   — full transcript ("" on any failure)
+            no_speech_prob  float — mean per-segment no-speech probability
+                                    (None if unavailable)
+            speech_confidence str — "high" / "medium" / "low" / "none"
+
+        Whisper happily transcribes song lyrics from trending audio with the
+        same confidence as real speech, so speech_confidence is a hint, not
+        a verdict — the LLM judgment prompt carries the real defence (treat
+        lyric-like text as ambient audio, not the creator's message).
+        """
+        empty = {"text": "", "no_speech_prob": None, "speech_confidence": "none"}
+
         if not self._ffmpeg_available:
-            return ""
+            return empty
 
         self._load_model()
         if self._model is None:
-            return ""
+            return empty
 
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             audio_path = Path(tmp.name)
@@ -128,7 +147,7 @@ class Transcriber:
         try:
             if not _extract_audio(video_path, audio_path):
                 logger.warning("Audio extraction failed for %s", video_path.name)
-                return ""
+                return empty
 
             segments, _info = self._model.transcribe(
                 str(audio_path),
@@ -136,15 +155,48 @@ class Transcriber:
                 beam_size=1,         # faster beam search
                 vad_filter=True,     # skip silent segments
             )
-            transcript = " ".join(seg.text.strip() for seg in segments)
-            return transcript.strip()
+
+            texts: list[str] = []
+            no_speech_probs: list[float] = []
+            for seg in segments:
+                texts.append(seg.text.strip())
+                prob = getattr(seg, "no_speech_prob", None)
+                if prob is not None:
+                    no_speech_probs.append(float(prob))
+
+            transcript = " ".join(t for t in texts if t).strip()
+            mean_prob = (
+                sum(no_speech_probs) / len(no_speech_probs)
+                if no_speech_probs else None
+            )
+
+            if not transcript:
+                confidence = "none"
+            elif mean_prob is None:
+                confidence = "medium"
+            elif mean_prob > 0.5:
+                confidence = "low"
+            elif mean_prob > 0.25:
+                confidence = "medium"
+            else:
+                confidence = "high"
+
+            return {
+                "text": transcript,
+                "no_speech_prob": round(mean_prob, 3) if mean_prob is not None else None,
+                "speech_confidence": confidence,
+            }
 
         except Exception as e:
             logger.warning("Transcription failed for %s: %s", video_path.name, e)
-            return ""
+            return empty
         finally:
             audio_path.unlink(missing_ok=True)
 
     def transcribe_batch(self, video_paths: list[Path]) -> list[str]:
         """Transcribe multiple videos, returning a list of transcripts in order."""
         return [self.transcribe(p) for p in video_paths]
+
+    def transcribe_batch_detailed(self, video_paths: list[Path]) -> list[dict]:
+        """Detailed transcription for multiple videos, in order."""
+        return [self.transcribe_detailed(p) for p in video_paths]

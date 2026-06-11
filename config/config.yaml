@@ -22,7 +22,9 @@ modash:
 # WHISPER TRANSCRIPTION
 # ─────────────────────────────────────────────
 whisper:
-  model_size: "tiny"       # Options: tiny, base, small, medium, large
+  model_size: "base"       # Options: tiny, base, small, medium, large
+                           # bumped tiny → base 2026-06-11: cleaner transcripts
+                           # help the speech-vs-music call and the judgment
                            # tiny  = fastest, less accurate (~5s/reel on CPU)
                            # base  = good balance (~15s/reel on CPU)
                            # small = more accurate (~30s/reel on CPU)
@@ -263,6 +265,23 @@ llm_analysis:
     - "Beauty & Skincare"
     - "Lifestyle"
     - "Food & Beverage"
+
+# ─────────────────────────────────────────────
+# CAMPAIGN VETTING (v2 flow — run_campaign.py + src/vetter.py)
+# One structured Claude call per creator: bio + captions + transcripts +
+# sampled reel frames (vision) judged against a campaign spec from
+# campaigns/<name>.yaml. Replaces CLIP + keyword gate in this flow.
+# ─────────────────────────────────────────────
+campaign_vetting:
+  model: null              # null = LLM_MODEL env var, else claude-haiku-4-5-20251001
+  reels_per_creator: 3     # reels to download + transcribe per creator
+  frames_per_reel: 2       # frames sampled per reel for the vision call
+  max_total_frames: 8      # hard cap on images per judgment call (cost control)
+  max_image_dim: 512       # long-edge resize before sending (cost control)
+  jpeg_quality: 70
+  cache_enabled: true      # reuse past verdicts for the same campaign
+  spine_push: true         # push judged creators to the central DB after each run
+  cache_max_age_days: 183  # ~6 months — older verdicts are re-vetted fresh
 
 # ─────────────────────────────────────────────
 # QUALITY GATE

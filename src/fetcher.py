@@ -22,6 +22,21 @@ logger = logging.getLogger(__name__)
 _NON_PROFILE_PATHS = {"p", "reel", "reels", "tv", "explore", "accounts", "stories"}
 
 
+class ModashCreditsExhausted(RuntimeError):
+	"""Raised when Modash returns not_enough_credits — the run must stop
+	loudly instead of silently marking every creator as fetch_failed."""
+
+
+def _check_credits(resp) -> None:
+	"""Raise ModashCreditsExhausted on a 403 credit-exhaustion response."""
+	if resp.status_code == 403 and "not_enough_credits" in resp.text:
+		raise ModashCreditsExhausted(
+			"Modash API credits are exhausted — top up the Modash account "
+			"before running again. (Nothing is wrong with the creators; "
+			"the data fetch was refused.)"
+		)
+
+
 def extract_username(value: str) -> Optional[str]:
 	"""
 	Extract an Instagram username from a profile URL or a plain username string.
@@ -121,6 +136,7 @@ class ModashFetcher:
 					params={"url": username},
 					timeout=10,
 				)
+				_check_credits(profile_resp)
 				profile_resp.raise_for_status()
 				profile_data = profile_resp.json()
 
@@ -137,6 +153,8 @@ class ModashFetcher:
 				reels = reels_data.get("items", [])
 				results[username] = self._normalize_profile(profile_data, reels)
 
+			except ModashCreditsExhausted:
+				raise  # do NOT swallow — the whole run must stop loudly
 			except requests.HTTPError as e:
 				logger.warning("Modash HTTP error for @%s — %s", username, e)
 			except requests.RequestException as e:
@@ -184,6 +202,11 @@ class ModashFetcher:
 			"followersCount": profile.get("follower_count", 0),
 			"followsCount": profile.get("following_count", 0),
 			"postsCount": profile.get("media_count", 0),
+			# Numeric Instagram ID — the spine's primary unique key
+			"platformUserId": str(profile.get("pk") or "") or None,
+			# Bio is the creator's own words — a stronger judgment signal than
+			# reel audio (which is often licensed music, not the creator).
+			"biography": profile.get("biography", "") or "",
 			"latestPosts": normalized_reels,
 		}
 
@@ -202,9 +225,88 @@ class ModashFetcher:
 			except (ValueError, TypeError):
 				logger.warning("Invalid timestamp: %s", taken_at)
 
+		# Caption text — Modash raw responses vary between a plain string and
+		# a {"text": ...} object depending on endpoint version.
+		caption = post.get("caption_text") or post.get("caption") or ""
+		if isinstance(caption, dict):
+			caption = caption.get("text", "") or ""
+
 		return {
 			"videoUrl": post.get("video_url"),
 			"likesCount": post.get("like_count", 0),
 			"commentsCount": post.get("comment_count", 0),
 			"timestamp": timestamp,
+			"caption": str(caption)[:500],
+			# Shortcode — needed by the media-comments endpoint
+			"code": post.get("code"),
 		}
+
+	def fetch_post_comments(self, code: str, max_comments: int = 15) -> list[str]:
+		"""
+		Fetch comment texts for one post by shortcode (raw API).
+
+		Used to judge engagement texture (real conversation vs emoji rows).
+		Returns [] on any failure — the judgment degrades gracefully.
+		"""
+		if not code:
+			return []
+		try:
+			resp = self._session.get(
+				f"{self._base_url}/raw/ig/media-comments",
+				params={"code": code},
+				timeout=15,
+			)
+			resp.raise_for_status()
+			comments = resp.json().get("comments") or []
+			texts = []
+			for c in comments[:max_comments]:
+				text = (c.get("text") or "").strip()
+				if text:
+					texts.append(text[:200])
+			return texts
+		except Exception as e:
+			logger.warning("Comment fetch failed for code %s — %s", code, e)
+			return []
+		finally:
+			if self._delay > 0:
+				time.sleep(self._delay)
+
+	def fetch_audience_report(self, username: str) -> Optional[dict]:
+		"""
+		Fetch the Modash audience report (full API, NOT raw — costs credits).
+
+		Returns a compact dict:
+		  geo_countries  list[(name, pct)]  — audience countries, descending
+		  genders        dict[code, pct]
+		  credibility    float|None         — Modash fake-follower signal (0–1)
+		or None on any failure. Call this sparingly — the campaign vetter only
+		requests it for creators that pass the LLM judgment (finalists), so
+		credits are spent on shortlist candidates, not the whole CSV.
+		"""
+		try:
+			resp = self._session.get(
+				f"{self._base_url}/instagram/profile/{username}/report",
+				timeout=30,
+			)
+			resp.raise_for_status()
+			profile = resp.json().get("profile") or {}
+			audience = profile.get("audience") or {}
+			geo = [
+				(g.get("name", "?"), round(float(g.get("weight", 0)) * 100, 1))
+				for g in (audience.get("geoCountries") or [])
+			]
+			genders = {
+				g.get("code", "?"): round(float(g.get("weight", 0)) * 100, 1)
+				for g in (audience.get("genders") or [])
+			}
+			return {
+				"geo_countries": geo,
+				"genders": genders,
+				"credibility": audience.get("credibility"),
+			}
+		except Exception as e:
+			logger.warning("Audience report failed for @%s — %s", username, e)
+			return None
+		finally:
+			if self._delay > 0:
+				time.sleep(self._delay)

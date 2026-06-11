@@ -1,7 +1,7 @@
 # Status & Milestones
 
 **Phase:** In production use, actively iterating
-**Last Updated:** 2026-06-05
+**Last Updated:** 2026-06-11
 
 For comprehensive system context see [../SYSTEM_CONTEXT.md](../SYSTEM_CONTEXT.md).
 
@@ -9,7 +9,11 @@ For comprehensive system context see [../SYSTEM_CONTEXT.md](../SYSTEM_CONTEXT.md
 
 ## Done
 
-- [x] Pipeline core: fetch → download → transcribe → CLIP → analyzer → scorer → LLM → quality gate → CSV + JSON
+- [x] **Training flywheel (2026-06-11)**: spine push (profiles + creator_vetting rows, auto after each run; first live --apply awaiting user approval), Calibration Deck page (borderline-first swipes, agreement rate, labels injected into prompts), Evidence & sources tab (uploads + site/Slack/Fathom fetch + distill-to-brief with human confirm)
+
+- [x] **Campaign vetting flow (v2)** — `run_campaign.py` + `src/vetter.py` + `src/campaign.py` + `src/frames.py`: CSV + campaign spec → shortlist/rejected/review CSVs. Hard filters first, then ONE structured Claude vision call (bio + captions + transcripts + sampled frames). Fixes the lyric-transcript false rejections (April Alexander / Richard Bromilow), the "no data = unsafe" gate misfires, and the essay-bloated CSVs from the Thrivin run. See SYSTEM_CONTEXT §2a.
+- [x] Thrivin campaign spec (`campaigns/thrivin.yaml`); hard-filter replay validated against the 38-creator Thrivin run
+- [x] Pipeline core (v1): fetch → download → transcribe → CLIP → analyzer → scorer → LLM → quality gate → CSV + JSON
 - [x] Streamlit UI shipped: Home + Vet Creators + Build Shortlist + Train Clients
 - [x] Light-mode design system with plain-language labels
 - [x] Quality gate v2 (universal-disqualifier filter, negation-aware, concerns-only scan)
@@ -23,19 +27,23 @@ For comprehensive system context see [../SYSTEM_CONTEXT.md](../SYSTEM_CONTEXT.md
 
 ## In Progress
 
-- Nothing actively in flight — awaiting user direction on next major piece
+- Nothing actively in flight. Same-day v2 follow-ups all landed 2026-06-11:
+  Thrivin floor → 0.5%, Streamlit UI simplified to Homepage + Vet for
+  Campaign + Train Clients (v1 pages archived to `to-archive/legacy-ui/`),
+  vetting cache shipped (6-month verdict reuse, `output/vetting_cache.db`),
+  Whisper tiny → base.
 
 ---
 
-## Up Next (priority order, see SYSTEM_CONTEXT.md §12 for full details)
+## Up Next (priority order, see SYSTEM_CONTEXT.md §12/§12a for full details)
 
-1. **Spine Option A** — push every vetted creator's `profiles` row to the central DB on every pipeline run. The gate is reliable, so the precondition is met. ~1–2 days of focused work.
-2. **Spine Option B** — push `creator_vetting` rows for per-creator scores. Depends on A. ~3–7 days.
-3. **Rebuild `src/creator_store.py`** — the SQLite cross-run store interface. Source file is missing; only `.pyc` survives. CSV-mode codepath works; SQLite codepath broken.
-4. **Corrections UI** — let pod members mark a Build Shortlist decision as wrong and persist the reason to the active client's `corrections.md`. Closes the feedback loop.
-5. **Push Elavate to spine** — same script, one command (`--client Elavate --apply`). Currently in CreatorVetter locally but not in the central DB.
-6. **Onboarding-call updates for Kloris** — once Mark gets the Kloris onboarding call notes, layer them into `knowledge/clients/Kloris/` and re-run the sync (will write version 2).
-7. **Extend `clip_prompts` / `niche_keywords`** in config.yaml to cover the niches the Training UI offers (Menopause, Sleep & Recovery, Equestrian, Nature & Country Lifestyle) — currently only 6 niches are scored.
+1. **First live spine push** — `python push_run_to_spine.py --run-dir output/campaigns/test_geo_comments --apply` (the permission layer requires the user to run/approve the first production write; auto-push activates for all later runs).
+2. **Top up Modash credits**, then re-vet the full Thrivin CSV with v2 — exercises geo + texture at batch scale and feeds the Calibration Deck + spine.
+3. **Label the 7 waiting calibration cards** for Thrivin to establish the first agreement-rate baseline.
+4. ~~Spine Option A~~ / ~~Option B (vetting rows)~~ / ~~Corrections UI~~ — shipped 2026-06-11 (auto-push + creator_vetting rows + Correct-a-decision + Calibration Deck).
+5. **Rebuild `src/creator_store.py`** — legacy SQLite store interface; source missing, only `.pyc` survives. Low urgency (v1 only).
+6. **Push Elavate to spine** — `sync_brand_context_to_spine.py --client Elavate --apply`.
+7. **Onboarding-call updates for Kloris** — layer call notes in via the new Evidence tab, re-sync (version 2).
 
 ---
 

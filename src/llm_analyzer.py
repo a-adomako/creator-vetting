@@ -95,12 +95,13 @@ def _load_calibration(knowledge_dir: Path, client_dir: Path = None) -> str:
         if content:
             parts.append(f"=== AGENCY STANDARDS & SELECTION CRITERIA ===\n{content}")
 
-    # 2–4. Client-specific files
+    # 2–5. Client-specific files
     if client_dir and client_dir.exists():
         for fname, header in (
             ("my_style.md",     "=== CLIENT SCORING STYLE ==="),
             ("corrections.md",  "=== PAST CORRECTIONS FOR THIS CLIENT ==="),
             ("good_examples.md","=== APPROVED EXAMPLES FOR THIS CLIENT ==="),
+            ("calibration_labels.md", "=== HUMAN-LABELLED EXAMPLES (CALIBRATION DECK) ==="),
         ):
             fpath = client_dir / fname
             if fpath.exists():

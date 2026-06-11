@@ -50,3 +50,10 @@ to-archive/**/*.docx
 
 # ── Streamlit cache ──────────────────────────────────────────────────────────
 .streamlit/cache/
+
+# ── Flywheel artefacts (2026-06-11) ──────────────────────────────────────────
+output/vetting_cache.db
+# Evidence pools may contain client-sensitive uploads / Slack dumps
+knowledge/clients/*/evidence/
+# CSVs saved by the upload widget on each run
+input/campaign_upload_*.csv

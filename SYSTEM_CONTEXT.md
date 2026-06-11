@@ -5,7 +5,7 @@
 > shipped, what hasn't, and where every important piece of code lives.
 > If anything in this doc contradicts the code, the code wins — update the doc.
 >
-> Last refreshed: 2026-06-05.
+> Last refreshed: 2026-06-11.
 
 ---
 
@@ -29,6 +29,19 @@ central Supabase database.
 
 The product positioning: **10k+ creators per week**, **all heavy work runs
 locally** (no per-frame paid vision APIs), and one cheap LLM call per creator.
+
+**As of 2026-06-11 there are TWO pipelines.** The original (above, "v1") still
+works and powers the Streamlit UI. The new **campaign vetting flow ("v2",
+`run_campaign.py` + `src/vetter.py`)** is the redesign built from first
+principles after the Thrivin run exposed three failures in v1 (lyric
+transcripts driving wrong rejections, no-data creators being scored as
+"unsafe", and bloated essay CSVs — see §5a and the 2026-06-11 decision log
+entries). v2 is one motion: **CSV + campaign spec → shortlist.csv /
+rejected.csv / review.csv**, with deterministic hard filters first and ONE
+structured Claude call (bio + captions + transcripts + sampled reel frames
+via Haiku vision) per surviving creator. v2 is the recommended flow for
+campaign work; v1 remains the path for client-blind bulk enrichment until
+v2 takes over the UI.
 
 ---
 
@@ -88,31 +101,132 @@ leaves usable output. The header is written on the first row using
 
 ---
 
+## 2a. Campaign vetting flow (v2) — `run_campaign.py`
+
+```
+Input CSV + campaigns/<name>.yaml (campaign spec)
+   │
+   ▼
+[CampaignVetter.run() in src/vetter.py]
+   │
+   ├─► Modash fetch (fetcher.py — now also returns bio + per-post captions)
+   │
+   ├─► src/scorer.py — score_profile()           (unchanged from v1)
+   │
+   ├─► STAGE 1 — HARD FILTERS (src/campaign.py, deterministic, free)
+   │       private / below follower min / above VIP ceiling / engagement
+   │       floor / dormancy. Fails here NEVER cost a download or LLM call.
+   │       VIP-tier creators route to review.csv, not rejected.csv.
+   │
+   ├─► STAGE 2 — CONTENT GATHERING (survivors only)
+   │       download reels → Whisper transcribe_detailed() (adds per-reel
+   │       speech_confidence hint) → sample 2 frames/reel as base64 JPEG
+   │       (src/frames.py, ≤8 frames, 512px, q70 ≈ 1–2¢/creator on Haiku).
+   │       Zero usable signal (no bio, captions, transcript, frames) →
+   │       review.csv as no_content. NEVER scored, NEVER marked unsafe.
+   │
+   ├─► STAGE 3 — ONE STRUCTURED JUDGMENT CALL (Claude Haiku vision)
+   │       System: knowledge/expertise.md + client folder calibration +
+   │       campaign brief/judgment_notes + EVIDENCE RULES (lyrics ≠ creator).
+   │       User: profile facts, bio, captions, labeled transcripts, frames.
+   │       Forced tool_choice → record_vetting_verdict — schema-valid output,
+   │       no JSON parsing, no keyword gate. Verdict: niche, fit score 0-100,
+   │       approve/reject/needs_review, ≤30-word reason, ≤40-word evidence,
+   │       universal_disqualifiers (enum list), visual_flags (none/
+   │       suggestive/nsfw), spoken_content_is_music (bool).
+   │
+   ▼
+output/campaigns/<name>_<timestamp>/
+   ├── shortlist.csv    approved only — 11 lean columns, one-line reasons
+   ├── rejected.csv     stage + category + reason (hard_filter | judgment | gate)
+   ├── review.csv       VIP tier, no-data, fetch failures, genuine ambiguity
+   └── profiles/<username>.json   full evidence per judged creator
+```
+
+**Why v2 exists** — three failures observed in the 2026-06-07 Thrivin run:
+
+1. **Lyric transcripts drove wrong universal rejections.** Whisper
+   transcribes the licensed/trending music on reels exactly like speech.
+   @aprilalexander was gate-blocked for a "racial slur" that was a song
+   lyric; @richardbromilowpt (a verified PT) was rejected as a "music
+   creator". Both were approved on human review. v2 defends three ways:
+   captions + bio (the creator's own words) are first-class inputs, frames
+   give direct visual evidence, and the prompt's EVIDENCE RULES forbid
+   attributing lyric content to the creator. The verdict's
+   `spoken_content_is_music` flag makes the detection auditable.
+2. **Missing data was recorded as "unsafe".** No-reel accounts got
+   llm_brand_safety=0 → gate-rejected as `rejected_brand_safety_critical`.
+   In v2, no-data creators are caught by hard filters or the no_content
+   check and routed to review — they never reach a safety judgment.
+3. **The keyword gate still false-positived** (@jasmijnvz_ rejected for
+   "MLM" inside a *cannot-assess-MLM* concern, slipping past the negation
+   lookback). v2 has no keyword scan: `universal_disqualifiers` comes back
+   as a schema-enforced enum list and `push_to_spine = (list is empty)`.
+
+**Validation (2026-06-11):** hard-filter replay over the 38-creator Thrivin
+run matched the human pass (no-data zombies rejected on metrics, katb_fit +
+charliekamale routed to VIP review). Live re-vet of April + Richard: no
+disqualifiers, music correctly flagged, rejections (if any) now cite real
+bio/caption/frame evidence and are tunable via the campaign YAML.
+
+**Campaign spec** (`campaigns/<name>.yaml`): `name`, `brief`,
+`target_niches`, `judgment_notes`, optional `client_folder` (injects
+`knowledge/clients/<folder>/` calibration), and `hard_filters:`
+(`min_followers`, `vip_review_above`, `min_engagement_pct`,
+`max_days_since_last_post`, `exclude_private`). See `campaigns/thrivin.yaml`
+for a fully-worked example built from the Thrivin client knowledge.
+
+**Vetting cache (added 2026-06-11)** — [src/vetting_cache.py](src/vetting_cache.py),
+SQLite at `output/vetting_cache.db`. Before fetching anything, the run checks
+whether each creator was already LLM-judged for THIS campaign within
+`campaign_vetting.cache_max_age_days` (default 183 ≈ 6 months). Hits replay
+the stored verdict into the right CSV with `source=cached:<date>` — zero
+Modash quota, zero LLM spend, instant. Only judged outcomes are cached;
+hard-filter results never are (metrics drift and re-checking is free). The
+cache self-seeds from existing `output/campaigns/*/profiles/*.json` on first
+open. Bypass: `--no-cache` on the CLI or untick "Reuse verdicts" in the UI.
+Verified: re-running April + Richard hit the cache 2/2 with 0 LLM calls.
+
+---
+
 ## 3. File map
 
 ```
 creator_vetter/
 ├── Homepage.py                         # Streamlit entry point — appears as "Homepage" in the sidebar nav
-├── run.py                              # CLI entry — runs the full pipeline on a CSV
+├── run.py                              # CLI entry — runs the v1 pipeline on a CSV
+├── run_campaign.py                     # NEW — CLI entry for the v2 campaign vetting flow (§2a)
+├── push_run_to_spine.py                # NEW — push an existing run's judged creators to the spine
 ├── agent.py                            # Legacy CLI conversational agent over an enriched CSV (still works)
 │
-├── pages/                              # Streamlit subpages (auto-numbered in sidebar)
-│   ├── 1_Vet_Creators.py               # Upload CSV → run pipeline → live progress
-│   ├── 2_Build_Shortlist.py            # Load enriched CSV → Claude filters for active client → download
-│   └── 3_Train_Clients.py              # Per-client brand context + target niches + scoring style
+├── campaigns/                          # NEW — campaign spec YAMLs for the v2 flow
+│   └── thrivin.yaml                    # Thrivin Gymwear spec (10k floor, 1% ER, 250k VIP ceiling)
+│
+├── pages/                              # Streamlit subpages (simplified 2026-06-11 — two pages)
+│   ├── 1_Vet_for_Campaign.py           # v2 flow: campaign + CSV → shortlist/rejected/review
+│   ├── 2_Train_Clients.py              # Client briefs + scoring style + Evidence & sources tab
+│   └── 3_Calibration_Deck.py           # Swipe deck: human labels, agreement rate, spine decisions
 │
 ├── src/
 │   ├── __init__.py
-│   ├── pipeline.py                     # Pipeline class — orchestrator
-│   ├── fetcher.py                      # ModashFetcher + extract_username()
+│   ├── pipeline.py                     # Pipeline class — v1 orchestrator
+│   ├── vetter.py                       # NEW — CampaignVetter, v2 orchestrator (§2a)
+│   ├── campaign.py                     # NEW — CampaignSpec + deterministic hard filters
+│   ├── frames.py                       # NEW — reel frame sampling → base64 JPEG for vision
+│   ├── fetcher.py                      # ModashFetcher + extract_username() (now returns bio + captions)
 │   ├── downloader.py                   # VideoDownloader — parallel reel downloads
-│   ├── transcriber.py                  # Transcriber — faster-whisper local
-│   ├── visual.py                       # VisualAnalyzer — CLIP + OpenCV
-│   ├── analyzer.py                     # NicheAnalyzer — fuses transcript + visual
-│   ├── scorer.py                       # score_profile() — engagement/quality/tier
-│   ├── llm_analyzer.py                 # LLMAnalyzer — Claude with calibration injection
-│   ├── llm_client.py                   # Anthropic + Ollama wrappers
-│   ├── quality_gate.py                 # Universal-disqualifier filter (v2 — see §5)
+│   ├── transcriber.py                  # Transcriber — faster-whisper local (+ transcribe_detailed with speech_confidence)
+│   ├── visual.py                       # VisualAnalyzer — CLIP + OpenCV (v1 only)
+│   ├── analyzer.py                     # NicheAnalyzer — fuses transcript + visual (v1 only)
+│   ├── scorer.py                       # score_profile() — engagement/quality/tier (shared v1+v2)
+│   ├── llm_analyzer.py                 # LLMAnalyzer — Claude with calibration injection (v1; _load_calibration shared with v2)
+│   ├── llm_client.py                   # Anthropic + Ollama wrappers (+ tool_choice for forced structured output)
+│   ├── vetting_cache.py                # NEW — cross-run verdict cache (6-month TTL, see §2a)
+│   ├── spine.py                        # NEW — spine push: /upsert + phantom run + creator_vetting rows
+│   ├── calibration.py                  # NEW — calibration deck candidates + label store
+│   ├── evidence.py                     # NEW — evidence uploads/fetch (site, Slack, Fathom) + distillation
+│   ├── corrections.py                  # NEW — human corrections → corrections.md + cache invalidation
+│   ├── quality_gate.py                 # Keyword-scan disqualifier filter (v1 only — v2 uses structured enums, see §2a)
 │   ├── modash.py                       # Modash discovery wrapper (used by legacy agent.py)
 │   ├── influencers_club.py             # Influencers.Club discovery wrapper (legacy)
 │   ├── agent_tools.py                  # Tool functions exposed to the conversational CLI agent
@@ -142,14 +256,17 @@ creator_vetter/
 │
 ├── input/                              # User-uploaded CSVs (cleaned 2026-06-07)
 ├── output/                             # Generated artefacts
-│   ├── enriched_<timestamp>.csv        # Per-run enriched output
-│   ├── profiles/<username>.json        # Per-creator JSON (full transcripts + raw CLIP)
+│   ├── enriched_<timestamp>.csv        # Per-run enriched output (v1)
+│   ├── campaigns/<name>_<ts>/          # v2 run outputs: shortlist/rejected/review.csv + profiles/*.json
+│   ├── vetting_cache.db                # Cross-run verdict cache for v2 (6-month TTL)
+│   ├── profiles/<username>.json        # Per-creator JSON (full transcripts + raw CLIP) (v1)
 │   ├── shortlists/                     # Agent-exported shortlists (legacy CLI)
 │   ├── creators.db                     # SQLite cross-run store (7 MB — creator_store.py source is missing, see §12)
 │   └── queued/                         # CSVs queued by the legacy agent for the next pipeline run
 │
 ├── temp/                               # Working dir for reel videos (auto-deleted per creator, .gitkeep only)
 ├── to-archive/                         # Holding pen for stale artefacts (~152 MB — see to-archive/README.md)
+│   ├── legacy-ui/                      # 1_Vet_Creators.py + 2_Build_Shortlist.py (v1 pages, retired 2026-06-11)
 │   ├── README.md                       # Explains what's in here and when it's safe to delete
 │   ├── empty-runs/                     # 0-byte + 2-byte enriched_*.csv from crashed runs
 │   ├── superseded-inputs/              # .xlsx duplicates + generic test CSVs
@@ -196,7 +313,8 @@ config is a documented anti-pattern. The file is loaded once at
 | `quality_weights` | engagement / audience / frequency / recency contributions to `overall_quality_score`. Must sum to 1.0. |
 | `tier_thresholds` | Score floors for tier A / B / C. Below C = D. |
 | `llm_analysis` | `enabled: true`, default `brand_context`, default `target_niches`. Skipped silently if `ANTHROPIC_API_KEY` is missing. |
-| `quality_gate` | **NEW** — patterns and thresholds for the universal-disqualifier filter. Full details in §5. |
+| `quality_gate` | Patterns and thresholds for the v1 keyword-scan disqualifier filter. Full details in §5. Not used by v2. |
+| `campaign_vetting` | **NEW** — v2 flow settings: `model` (null = LLM_MODEL env), `reels_per_creator` (3), `frames_per_reel` (2), `max_total_frames` (8), `max_image_dim` (512), `jpeg_quality` (70), `cache_enabled` (true), `cache_max_age_days` (183). |
 
 ### Per-run overrides
 
@@ -207,6 +325,13 @@ the sidebar sliders. The file is deleted in the pipeline's `finally` block.
 ---
 
 ## 5. The quality gate — universal disqualifiers vs brand-fit mismatches
+
+> **v1 only.** The v2 campaign flow does not run this gate — it gets
+> universal disqualifiers back from the judgment call as a schema-enforced
+> enum list (§2a), which eliminates the keyword-matching false-positive
+> class entirely (two were observed in a single 38-creator run; see the
+> 2026-06-11 decision log). The universal-vs-brand-fit *principle* below
+> still governs both flows.
 
 Lives at [src/quality_gate.py](src/quality_gate.py). All patterns and
 thresholds in `config/config.yaml` → `quality_gate:`. Runs after the LLM
@@ -362,14 +487,20 @@ at the top so styling follows the user across navigation. Theme base in
 `.streamlit/config.toml` is `light` with primary `#FF1F8E`, bg `#FFFFFF`,
 secondary bg `#FAFAFA`, text `#1D1D1F`.
 
-### Three pages (auto-discovered from `pages/`)
+### Two pages (auto-discovered from `pages/`) — simplified 2026-06-11
+
+The UI was cut down to match the v2 flow: **Vet Creators** and **Build
+Shortlist** (both v1) moved to `to-archive/legacy-ui/` because Vet for
+Campaign does both jobs in one motion. The Homepage's sidebar active-client
+selector, hero stats, and CSV-format section were removed with them — the
+campaign YAML's `client_folder` now decides calibration, not a global
+selector.
 
 | File | Purpose |
 |---|---|
-| [Homepage.py](Homepage.py) | **Homepage** (renamed from `app.py` 2026-06-05 so the sidebar nav label reads "Homepage" instead of "app"). Hero, three workflow cards (Vet Creators / Build Shortlist / Train Clients), config status (Modash + Anthropic key presence), input CSV format guide. Sidebar: brand lockup, active-client selector with descriptive caption noting which pages use it. |
-| [pages/1_Vet_Creators.py](pages/1_Vet_Creators.py) | **Vet Creators.** 4 steps: (1) upload CSV with downloadable 3-row sample, (2) review settings summary, (3) live progress with first-run model-download notice, (4) completion with link to Build Shortlist. Sidebar settings: reels per creator (1–7, default 3), Whisper model (tiny/base/small, default base). |
-| [pages/2_Build_Shortlist.py](pages/2_Build_Shortlist.py) | **Build Shortlist.** 4 steps: (1) auto-load most recent enriched CSV with reload button, (2) pick client (defaults to sidebar active client) or type one-off brief, (3) Claude filters and groups into approved / soft-reject / hard-reject, (4) download as CSV or JSON. Essential columns shown by default; full enriched data behind a "Show every column" expander. |
-| [pages/3_Train_Clients.py](pages/3_Train_Clients.py) | **Train Clients.** Three tabs: (1) clients list + create + delete + set active, (2) brand context + target niches multiselect + scoring notes form, (3) personal scoring style markdown editor with a starter template and guiding questions. |
+| [Homepage.py](Homepage.py) | **Homepage.** Brand lockup, short hero, two workflow cards (Vet for Campaign / Train Clients), API-key status. |
+| [pages/1_Vet_for_Campaign.py](pages/1_Vet_for_Campaign.py) | **Vet for Campaign (v2).** 4 steps: (1) pick a campaign spec from campaigns/*.yaml with a summary of its brief + instant filters, (2) upload CSV, (3) run with live progress, (4) results as Shortlist / Rejected / Needs-review tabs with per-file downloads. Sidebar: test-run limit + "Reuse verdicts from the last 6 months" cache toggle. Same engine as `run_campaign.py` via a `progress_callback` on `CampaignVetter.run()`. |
+| [pages/2_Train_Clients.py](pages/2_Train_Clients.py) | **Train Clients.** Three tabs: (1) clients list + create + delete + set active, (2) brand context + target niches multiselect + scoring notes form, (3) personal scoring style markdown editor with a starter template and guiding questions. |
 
 ### Shared label transforms
 
@@ -414,7 +545,20 @@ shortlist preview: `ig_username`, `ig_full_name`, `followers`,
 
 ## 8. CLI tools and scripts
 
-### `run.py` — full pipeline from the command line
+### `run_campaign.py` — campaign vetting (v2, recommended for campaign work)
+
+```bash
+source ../../.venv/bin/activate
+python run_campaign.py --input input/creators.csv --campaign campaigns/thrivin.yaml
+python run_campaign.py --input input/x.csv --campaign campaigns/thrivin.yaml --limit 5   # test run
+```
+
+CSV + campaign spec → `output/campaigns/<name>_<timestamp>/` with
+shortlist.csv, rejected.csv, review.csv, and per-creator evidence JSONs.
+Requires both `MODASH_API_KEY` and `ANTHROPIC_API_KEY` (no CLIP fallback).
+~19s/creator observed; hard-filtered creators cost no download or LLM call.
+
+### `run.py` — v1 pipeline from the command line
 
 ```bash
 source ../../.venv/bin/activate     # workspace venv has the deps
@@ -724,6 +868,156 @@ Memory copy lives at [memory/decisions.md](memory/decisions.md).
   - [src/llm_client.py](src/llm_client.py) — added `max_tokens: int = 2048` parameter to `AnthropicClient.chat()` and `OllamaClient.chat()` (Ollama ignores it).
   - [pages/2_Build_Shortlist.py](pages/2_Build_Shortlist.py) — `_CHUNK_SIZE`, `_MAX_TOKENS_PER_CHUNK`, `_run_one_chunk()`, `_parse_json_lenient()`, refactored `_filter_creators_with_claude()` to return `(approved_rows, merged_dict, warnings_list)`.
 
+### 2026-06-11 — Lyric-transcript false rejections diagnosed (Thrivin run)
+- **Finding:** Whisper transcribes the licensed/trending music on reels as if
+  it were the creator speaking. In the 2026-06-07 Thrivin run this drove
+  wrong decisions: @aprilalexander gate-blocked for a "racial slur" that was
+  a song lyric; @richardbromilowpt (verified PT) LLM-rejected as a "music
+  creator". Both confirmed accepted on human review. Two further gate false
+  positives in the same 38 rows: @jasmijnvz_ rejected_mlm on "MLM" inside a
+  *cannot-assess* concern (negation lookback miss), and @issychapman
+  rejected_brand_safety_critical because *no data* produced brand_safety=0.
+- **Conclusion:** transcript-only judgment + keyword-scan gating are
+  structurally unreliable. Drove the v2 build below.
+
+### 2026-06-11 — Campaign vetting flow (v2) built
+- **Decision:** New pipeline alongside v1 (v1 untouched, still powers the
+  UI). One motion: CSV + campaign spec → shortlist / rejected / review.
+  Full design in §2a.
+- **What changed vs v1:**
+  - **Hard filters first** ([src/campaign.py](src/campaign.py)) — follower
+    band, engagement floor, dormancy, private, VIP ceiling run before any
+    download or LLM call. No-data accounts can no longer reach a safety
+    judgment (fixes the "missing data = unsafe" class).
+  - **CLIP + keyword niche fusion dropped from this flow** — replaced by
+    sampled reel frames ([src/frames.py](src/frames.py), ≤8 frames @512px
+    ≈1–2¢/creator) sent to Claude Haiku vision in ONE structured call per
+    creator ([src/vetter.py](src/vetter.py)). Captions + bio (the creator's
+    own words, newly fetched in [src/fetcher.py](src/fetcher.py)) are
+    first-class judgment inputs.
+  - **Keyword gate dropped from this flow** — `universal_disqualifiers`
+    returns as a schema-enforced enum list via forced tool_choice
+    ([src/llm_client.py](src/llm_client.py)); `push_to_spine` = empty list.
+  - **Lyric defence** — prompt EVIDENCE RULES forbid attributing lyric
+    content to the creator; `spoken_content_is_music` in the verdict makes
+    it auditable; [src/transcriber.py](src/transcriber.py) gained
+    `transcribe_detailed()` with a per-reel `speech_confidence` hint.
+  - **Lean outputs** — three small CSVs with ≤30-word reasons; full
+    evidence lives in `profiles/<username>.json` per run. No more
+    five-essay rows.
+- **Validation:** hard-filter replay over the 38-creator Thrivin run matched
+  the human pass (zombie accounts → metric rejects; katb_fit/charliekamale
+  → VIP review). Live re-vet of April + Richard: zero disqualifiers, music
+  correctly flagged, evidence-cited verdicts.
+- **Known tension:** Thrivin's documented 1% engagement floor rejects
+  @fitwithmaaike_ (0.74%) and @demivthuil (0.68%), both approved by the
+  human pass. One-line fix in `campaigns/thrivin.yaml` if the floor should
+  be 0.5 — awaiting user call.
+
+### 2026-06-11 (later) — Vetting cache + frontend simplification
+- **Vetting cache** — [src/vetting_cache.py](src/vetting_cache.py): a creator
+  already LLM-judged for the same campaign within ~6 months
+  (`cache_max_age_days: 183`) is replayed from `output/vetting_cache.db`
+  instead of re-fetched/re-judged. Zero Modash + LLM cost on hits; `source`
+  column says `cached:<date>`. Hard-filter outcomes are never cached
+  (metrics drift; rechecking is free). Self-seeds from past run folders.
+  User-requested ("if someone has already been vetted for this campaign…
+  pull from the database if it's in the last 6 months").
+- **Frontend simplified** (user-requested) — UI is now Homepage +
+  Vet for Campaign + Train Clients. `pages/1_Vet_Creators.py` and
+  `pages/2_Build_Shortlist.py` moved to `to-archive/legacy-ui/` (superseded
+  by the one-motion v2 page). Homepage lost the active-client sidebar
+  selector (campaign YAML decides calibration), hero stats, and the
+  CSV-format section.
+- **Thrivin engagement floor → 0.5%** (user call) — docs said 1.0 but the
+  human pass approved 0.68–0.74% creators; borderline ER is now the LLM's
+  judgment call.
+- **Whisper tiny → base** in config — cleaner transcripts help the
+  speech-vs-music distinction and the judgment.
+
+### 2026-06-11 (evening) — Accuracy upgrades: audience geo, comment texture, corrections loop
+- **Audience geo check (user-approved lever #1)** — after the LLM approves a
+  creator, the vetter fetches the Modash audience report (full API, costs
+  credits — finalists only) and checks the campaign's
+  `audience.target_country` / `min_pct`. Below the floor → demoted to
+  review.csv as `audience_geo_mismatch` with the numbers in the reason.
+  Shortlist gains `audience_target_pct`, `audience_credibility` (Modash
+  fake-follower signal), `audience_top_countries`. First live probe proved
+  the value instantly: @itsjustheva (A-tier, 31% ER) is 42.7% Iran / 8.7% UK
+  / 53% male — invisible to every previous pass.
+- **Comment texture (lever #2)** — comments from the 2 most recent posts
+  (raw API `media-comments?code=`) are sampled into the judgment prompt;
+  the verdict gains `engagement_texture` (real_conversation / mixed /
+  emoji_or_bot / unknown). Live-validated: @gserranofit's emoji rows →
+  `emoji_or_bot`; @peacheymiax's substantive replies → `mixed`.
+- **Corrections loop (lever #3)** — "Correct a decision" expander on the
+  results step ([src/corrections.py](src/corrections.py)): appends to the
+  client's `corrections.md` (already injected into every future judgment)
+  and invalidates the creator's cached verdict so the next run re-judges
+  with the lesson in context.
+- **Credit-exhaustion guard** — Modash `not_enough_credits` (403) was being
+  misreported as per-creator "fetch_failed". Now raises
+  `ModashCreditsExhausted` and stops the run loudly. Found the hard way:
+  credits ran out mid-test on 2026-06-11.
+- **Spine consolidation: forward-only (user decision)** — `creators.db`
+  (stale April v1 snapshot) will NOT be bulk-pushed. Option A pushes
+  fresh v2-vetted creators only.
+
+### 2026-06-11 (late night) — The training flywheel shipped (spine push + calibration deck + evidence intake)
+
+User decision: training is evidence-curation, not document-writing. Four
+pieces, built in dependency order:
+
+- **Spine Option A + decisions plumbing** ([src/spine.py](src/spine.py),
+  [push_run_to_spine.py](push_run_to_spine.py)). Every judged creator with
+  no disqualifiers → `POST /upsert` on the spine API (profile row, keyed by
+  handle + `platform_user_id` — Modash `pk` now threaded through the
+  fetcher) **plus** a row in the spine's existing `creator_vetting` table
+  (migration 0014) under a phantom `discovery_requests`/`discovery_runs`
+  pair tagged "CreatorVetter v2". Decision enum mapping: LLM
+  approve/reject/needs_review → `auto_approved`/`auto_rejected`/
+  `pending_review`; calibration swipes + corrections → `human_approved`/
+  `human_rejected` (via `record_human_decision()`). The vetter auto-pushes
+  at end of run (`campaign_vetting.spine_push: true`, best-effort, never
+  fails the run); the CLI covers older runs. **Status: dry-run validated
+  (client slug resolves, decisions map); the first live `--apply` write
+  needs the user to run/approve it** — the permission layer correctly
+  stopped an unattended first write to the production DB.
+- **Calibration Deck** ([pages/3_Calibration_Deck.py](pages/3_Calibration_Deck.py),
+  [src/calibration.py](src/calibration.py)). Shows judged creators
+  borderline-first (fit nearest 55) WITHOUT revealing the model's call.
+  Each human swipe writes: `calibration_labels.jsonl` (machine log),
+  `calibration_labels.md` (now the 4th file `_load_calibration()` injects
+  into every judgment — disagreements are marked "MODEL DISAGREED… the
+  human call is correct"), and best-effort a `human_*` spine row. Header
+  shows the **agreement rate** — the first quantitative answer to "is this
+  client trained well enough?" (90%+ = trust it; <70% = keep labelling).
+- **Evidence & sources tab** (Train Clients tab 4,
+  [src/evidence.py](src/evidence.py)). Upload anything (txt/md/csv/yaml/
+  json/pdf) into `knowledge/clients/<name>/evidence/`, or have Claude fetch
+  it: brand website (tag-stripped), the client's Slack channel
+  (SLACK_BOT_TOKEN from the workspace .env), Fathom call transcripts
+  (FATHOM_API_KEY). **Raw evidence never enters prompts** — a distillation
+  pass extracts judgment rules with provenance, the human edits/confirms,
+  and only then does it land in `my_style.md`. Distiller validated live:
+  extracted geo/follower/yoga/Boohoo rules from a noisy test snippet,
+  ignored the chatter.
+
+### 2026-06-11 (night) — UI redesigned to the Augmentum brand design language
+- **Decision:** Replace the Apple-style palette (near-black #1D1D1F, pink
+  #FF1F8E, Syne/DM Sans) with the canonical Augmentum light-mode brand spec
+  from `.claude/skills/augmentum-design-language-light-mode`: navy `#030937`
+  text (never pure black), hot-pink `#ff007e` accent, **Playfair Display**
+  (display, italic pink accents) + **Geist** (body/UI/data), off-white
+  `#f7f8fc` surface gradient, pink-gradient card accent strips, navy
+  download buttons, pink primary buttons, metric cards with pink bottom
+  borders.
+- **Scope:** [src/ui_styles.py](src/ui_styles.py) fully rewritten (class
+  names preserved so page markup kept working); inline hexes in
+  Homepage + both pages swept to the new tokens; `.streamlit/config.toml`
+  theme updated. Editorial, premium, data-forward — matches
+  augmentum-media.com.
+
 ### 2026-06-05 — Light-mode UI shipped (Option B from the brainstorm)
 - **Decision:** Swap from dark mode + animated effects to a light, restrained Apple-style design.
 - **Why:** Reduces the "developer tool" / "product launch page" feel; calmer for daily internal use. Light mode is closer to augmentum-media.com's editorial pages.
@@ -736,11 +1030,13 @@ Memory copy lives at [memory/decisions.md](memory/decisions.md).
 
 ## 12. Status — what's done, what's open, what to build next
 
-### Last refreshed: 2026-06-05
+### Last refreshed: 2026-06-11
 
 ### Done
 
-- ✅ Pipeline core: fetch → download → transcribe → CLIP → analyzer → scorer → LLM → gate → CSV + JSON
+- ✅ **Campaign vetting flow (v2)** — `run_campaign.py`: hard filters → frames+captions+bio → one structured vision call → shortlist/rejected/review CSVs. Validated against the Thrivin run (§2a)
+- ✅ Thrivin campaign spec (`campaigns/thrivin.yaml`) built from client knowledge
+- ✅ Pipeline core (v1): fetch → download → transcribe → CLIP → analyzer → scorer → LLM → gate → CSV + JSON
 - ✅ Quality gate v2 (negation-aware, concerns-only) — false positives fixed
 - ✅ Light-mode UI shipped (3 pages, descriptive copy, plain-language labels)
 - ✅ Button-text contrast bump (WCAG AA — darker pink #D91775 on primary buttons)
@@ -753,6 +1049,21 @@ Memory copy lives at [memory/decisions.md](memory/decisions.md).
 - ✅ Legacy CLI agent (13 tools) still works as before
 
 ### Open gaps (priority order)
+
+0. **v2 follow-ups (new, 2026-06-11):**
+   - ~~Settle the Thrivin engagement floor~~ — set to 0.5% same day.
+   - ~~Wire the v2 flow into the Streamlit UI~~ — shipped same day; UI then
+     simplified to Homepage + Vet for Campaign + Train Clients (v1 pages
+     archived to `to-archive/legacy-ui/`).
+   - ~~Re-vet avoidance~~ — vetting cache shipped same day (6-month TTL).
+   - Spine Option A should read v2's `push_to_spine` (from the enum
+     verdict) rather than v1's keyword gate column. The legacy
+     `output/creators.db` (4,904 rows of April v1 scores, only 850 with LLM
+     verdicts, frozen since 2026-04-21) should NOT be bulk-pushed — it's a
+     stale client-blind snapshot; consolidate by pushing fresh v2-vetted
+     profiles instead and treating creators.db as archive material.
+   - Decide v1's future: the engine still exists for bulk enrichment via
+     `run.py`, but the UI no longer exposes it.
 
 1. **`src/creator_store.py` source is missing.** The SQLite file
    `output/creators.db` exists. `src/agent_tools.py` references the class.
@@ -826,6 +1137,42 @@ push exists conceptually. ~1–2 days of focused work; immediate value.
 
 ---
 
+## 12a. Future additions to make
+
+The agreed roadmap, in priority order. (Levers 1–3 from the 2026-06-11
+accuracy review shipped same day — see the decisions log.)
+
+1. ~~**Spine Option A — consolidate forward**~~ — SHIPPED 2026-06-11 (see
+   decisions log). Remaining: the first live `--apply` push needs user
+   approval; after that it runs automatically at the end of every vet run.
+1b. **(superseded detail below kept for design reference)** Push each
+   freshly v2-vetted creator's profile to the central Supabase DB after a
+   run, reading `push_to_spine` from the structured verdict. Do NOT bulk-
+   push `creators.db` — it's a stale, client-blind April v1 snapshot
+   (4,904 rows, only 850 with LLM verdicts, frozen 2026-04-21). Treat it
+   as archive material. Design + open questions in §10.
+2. **Bio link checking (lever #4 — deliberately deferred).** Thread
+   `external_url` + `bio_links` (already confirmed present in the Modash
+   user-info response) through `_normalize_profile` and into the judgment
+   prompt. Cheap, high-signal for universal disqualifiers (OnlyFans/Linktree
+   destinations) — left for later by user call 2026-06-11.
+3. **Spine Option B** — per-creator `creator_vetting` rows in the central
+   DB (after A). "Have we vetted this creator for any client before?"
+   becomes a cross-campaign query, superseding the local vetting cache.
+4. **Live geo validation run** — the audience-report integration is coded
+   and the endpoint is proven, but the full approve→report→demote path
+   has not run end-to-end yet: Modash credits ran out mid-test. Re-test
+   on the first run after the account is topped up.
+5. **Re-vet the full Thrivin CSV with v2** once credits are back —
+   produces the clean shortlist and exercises geo + texture at batch scale.
+6. **Comment pagination / weighting** — today we sample the first ~20
+   comments of the 2 newest posts. If texture calls look noisy, sample
+   across more posts or weight by comment length.
+7. **Tests.** Still no `tests/` directory. The hard filters, gate logic,
+   cache TTL, and slugify are all pure functions begging for unit tests.
+
+---
+
 ## 13. How to run
 
 ### First-time setup (macOS)
@@ -855,6 +1202,11 @@ when this is happening.
 ### CLI pipeline
 
 ```bash
+# v2 — campaign vetting (recommended for campaign work)
+python run_campaign.py --input input/your_file.csv --campaign campaigns/thrivin.yaml
+# Output → output/campaigns/<name>_<timestamp>/{shortlist,rejected,review}.csv + profiles/
+
+# v1 — client-blind enrichment
 python run.py --input input/your_file.csv
 # Output → output/enriched_<timestamp>.csv + output/profiles/<username>.json
 ```
@@ -919,6 +1271,20 @@ codebase. If any of these get broken in a refactor, fix them.
     `knowledge/clients/<name>/`, run
     `scripts/sync_brand_context_to_spine.py --client <name> --apply`
     to push the change centrally. The script versions in place.
+12. **Never attribute reel-audio transcript content to the creator.**
+    Reels routinely use licensed/trending music; Whisper transcribes the
+    lyrics like speech. Any judgment path must treat lyric-like transcripts
+    as ambient audio (the v2 prompt's EVIDENCE RULES encode this). Profanity
+    or slurs inside song lyrics are never grounds for rejection.
+13. **Missing data is never a safety verdict.** A creator with no reels /
+    bio / captions routes to review as `no_content` — they must not reach
+    an LLM safety judgment or be recorded as unsafe.
+14. **v2 structured output stays schema-enforced.** Universal disqualifiers
+    come back as an enum list via forced tool_choice — do not reintroduce
+    free-text scanning or JSON-from-prose parsing into the v2 verdict path.
+15. **Hard filters before spend.** In the v2 flow, metric criteria
+    (followers, engagement, recency) must run before reel downloads and
+    LLM calls — campaign YAML is where those thresholds live, not code.
 
 ---
 
@@ -926,11 +1292,19 @@ codebase. If any of these get broken in a refactor, fix them.
 
 If you're about to edit, start here.
 
-### Pipeline + gating
+### Campaign vetting (v2)
+- [src/vetter.py](src/vetter.py) — `CampaignVetter.run()` orchestrator,
+  the verdict tool schema, and the EVIDENCE RULES prompt (lyric defence).
+- [src/campaign.py](src/campaign.py) — `CampaignSpec` + hard filters.
+- [campaigns/thrivin.yaml](campaigns/thrivin.yaml) — worked campaign spec;
+  thresholds and judgment notes live here, not in code.
+- [src/frames.py](src/frames.py) — frame sampling for the vision call.
+
+### Pipeline + gating (v1)
 - [config/config.yaml](config/config.yaml) — all thresholds, niches, CLIP
-  prompts, gate patterns. Edit here, not in code.
+  prompts, gate patterns, and the `campaign_vetting:` block. Edit here, not in code.
 - [src/pipeline.py](src/pipeline.py) — `Pipeline.run()` orchestrator. Every
-  entry point goes through it.
+  v1 entry point goes through it.
 - [src/fetcher.py](src/fetcher.py) — `_normalize_profile()` maps Modash's
   response shape to our internal contract. If Modash changes their schema,
   this breaks first.

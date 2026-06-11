@@ -45,6 +45,7 @@ class OllamaClient:
         tools: list[dict] = None,
         system: str = None,
         max_tokens: int = 2048,  # ignored by Ollama provider; here for API parity
+        tool_choice: dict = None,  # ignored by Ollama provider; here for API parity
     ) -> dict:
         """
         Send messages and return response dict with:
@@ -110,6 +111,7 @@ class AnthropicClient:
         tools: list[dict] = None,
         system: str = None,
         max_tokens: int = 2048,
+        tool_choice: dict = None,
     ) -> dict:
         """
         Send messages and return response dict.
@@ -117,6 +119,12 @@ class AnthropicClient:
         max_tokens defaults to 2048 (fine for the per-creator LLM analyzer pass).
         Callers like Build Shortlist that need long structured JSON output
         should bump this to ~8000 to avoid mid-response truncation.
+
+        tool_choice (e.g. {"type": "tool", "name": "record_vetting_verdict"})
+        forces the model to respond via that tool — guarantees schema-valid
+        structured output with no JSON parsing. Used by the campaign vetter.
+        Message content may be a list of content blocks (text + image) for
+        vision calls; blocks are passed through to the API verbatim.
         """
         import time
         kwargs: dict[str, Any] = {
@@ -128,6 +136,8 @@ class AnthropicClient:
             kwargs["system"] = system
         if tools:
             kwargs["tools"] = tools
+        if tool_choice:
+            kwargs["tool_choice"] = tool_choice
 
         for attempt in range(5):
             try:

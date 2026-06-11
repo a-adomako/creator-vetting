@@ -1,0 +1,52 @@
+# Campaign spec — Thrivin Gymwear creator seeding
+#
+# Hard-filter values mirror the client's documented criteria in
+# knowledge/clients/Thrivin-Gymwear/ (10k minimum set Jan 2026; sub-1%
+# engagement at 10k+ reads as inauthentic growth; VIP routing matches
+# Khaleel's Apr–May 2026 vetting vocabulary). The judgment side (aesthetic,
+# geo, gym credibility) is carried by the client_folder knowledge files,
+# which are injected into the LLM prompt automatically.
+
+name: thrivin
+client_folder: Thrivin-Gymwear
+
+brief: >
+  THRIVIN is a premium UK gymwear brand (hero range: Elevate™ Sculpting
+  collection — halterneck tops, scrunch shorts, jumpsuits). We are seeding
+  product to UK-primary creators in two buckets: "Gymfluencers" (real
+  training content, premium gym-floor aesthetic) and "Lifestyle" (premium
+  athleisure wardrobe that neighbours Oddmuse — NOT fast-fashion haul
+  energy). The product range is gym/fitness-optimised only; yoga-identity
+  creators are off-brief for now.
+
+target_niches:
+  - Fitness
+  - Health & Wellness
+  - Lifestyle
+
+judgment_notes: >
+  Approve only creators whose grid would credibly photograph Thrivin pieces:
+  real training content or premium-athleisure lifestyle. Reject for: wrong
+  aesthetics (fast-fashion / Boohoo-adjacent), too-masculine or competitive-
+  sport identity (bodybuilder / powerlifter / runner), not enough gym
+  content, talking-head-dominated feeds, sexualised-fitness framing, or
+  clearly non-UK/EU positioning. Use needs_review for: pregnancy (defer,
+  don't reject), modest-aesthetic creators (workable with coverage pieces),
+  and genuine geo ambiguity. Male creators are acceptable only with clear
+  premium gym credibility — flag as needs_review rather than approve.
+
+hard_filters:
+  min_followers: 10000         # set by Thrivin Jan 2026; standout carve-outs are manual
+  vip_review_above: 250000     # above this → bespoke Atlanta/Toya review, not gifting
+  min_engagement_pct: 0.5      # set 0.5 (2026-06-11) — client docs say 1.0 but the human
+                               # pass approved 0.68–0.74% creators; LLM judges borderline ER
+
+  max_days_since_last_post: 60 # seeding needs creators who actually post
+  exclude_private: true
+
+# Audience demographics check — Modash report (costs credits), fetched ONLY
+# for creators the LLM approves. Thrivin wants ~50% UK audience; below
+# min_pct demotes the approval to needs-review with the numbers attached.
+audience:
+  target_country: "United Kingdom"
+  min_pct: 35

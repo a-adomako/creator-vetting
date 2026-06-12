@@ -516,6 +516,27 @@ class CampaignVetter:
                 )
 
         to_fetch = [u for u in usernames if u not in cached_hits]
+
+        # Balance check before spending — raw pool and credits are separate
+        if to_fetch:
+            from .modash_usage import get_balance
+            balance = get_balance()
+            if balance is not None:
+                raw_left = balance.get("raw_requests")
+                needed = len(to_fetch) * 2  # user-info + user-reels each
+                logger.info(
+                    "Modash balance: %.2f credits, %s raw requests "
+                    "(this run needs ~%d raw + comments)",
+                    balance.get("credits") or 0, raw_left, needed,
+                )
+                if raw_left is not None and raw_left < needed:
+                    logger.warning(
+                        "⚠ Raw-request pool (%s) likely insufficient for %d "
+                        "creators — expect the run to stop early. Ask for a "
+                        "raw-request top-up in #augmentum-modash.",
+                        raw_left, len(to_fetch),
+                    )
+
         profiles = {}
         if to_fetch:
             if progress_callback:
@@ -791,6 +812,21 @@ class CampaignVetter:
                     "Spine push skipped — %s (run output is unaffected; "
                     "push later with push_run_to_spine.py)", e,
                 )
+
+        # This run's Modash consumption (from the local usage log, last hour)
+        try:
+            from .modash_usage import get_balance, usage_summary
+            recent = usage_summary(days=1)
+            balance = get_balance()
+            logger.info(
+                "Modash use : %d raw requests + %.2f credits today "
+                "(account-wide remaining: %s credits / %s raw)",
+                recent["raw_requests"], recent["credits"],
+                (balance or {}).get("credits", "?"),
+                (balance or {}).get("raw_requests", "?"),
+            )
+        except Exception:
+            pass
 
         logger.info("\n── Campaign run complete ─────────────────")
         logger.info("Campaign   : %s", self.campaign.name)

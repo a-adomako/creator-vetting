@@ -963,6 +963,21 @@ Memory copy lives at [memory/decisions.md](memory/decisions.md).
   (stale April v1 snapshot) will NOT be bulk-pushed. Option A pushes
   fresh v2-vetted creators only.
 
+### 2026-06-12 — Modash credit monitoring + the two-pools discovery
+- **Modash bills from two SEPARATE pools** (confirmed via `/v1/user/info` +
+  #augmentum-modash): Discovery API "credits" (report=1.0, classic
+  search=0.15/page, AI search=0.025/result) and a RAW API "rawRequests"
+  allotment (user-info / user-reels / media-comments = 1 each). The
+  2026-06-11 "credits exhausted" incident was actually the RAW pool hitting
+  -10 while 461.55 Discovery credits sat unused. The account is SHARED
+  across Augmentum (Aditya's discovery agent, Mark's tools, CreatorVetter).
+- **Monitoring shipped** ([src/modash_usage.py](src/modash_usage.py)):
+  every Modash call logs to `output/modash_usage.jsonl`; `get_balance()`
+  reads the live account-wide pools; the Homepage Modash card shows both
+  pools + this tool's 7-day usage with a low-raw warning; the vetter checks
+  the balance BEFORE fetching (warns when the raw pool can't cover the run)
+  and prints a consumption line at run end.
+
 ### 2026-06-11 (late night) — The training flywheel shipped (spine push + calibration deck + evidence intake)
 
 User decision: training is evidence-curation, not document-writing. Four

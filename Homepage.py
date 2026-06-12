@@ -156,18 +156,38 @@ anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
 
 cfg_col1, cfg_col2 = st.columns(2, gap="small")
 
+@st.cache_data(ttl=600, show_spinner=False)
+def _modash_balance():
+    from src.modash_usage import get_balance, usage_summary
+    return get_balance(), usage_summary(days=7)
+
+
 with cfg_col1:
-    dot_class = "ok" if modash_key else "err"
-    status_text = (
-        "Configured — the tool can fetch Instagram profile data and reels"
-        if modash_key else
-        "Not set — vetting will not work until this is added to .env"
-    )
+    if not modash_key:
+        dot_class, status_text = "err", (
+            "Not set — vetting will not work until this is added to .env"
+        )
+    else:
+        balance, week = _modash_balance()
+        if balance is None:
+            dot_class, status_text = "ok", "Configured — balance check unavailable right now"
+        else:
+            credits = balance.get("credits") or 0
+            raw = balance.get("raw_requests")
+            raw_ok = raw is not None and raw > 100
+            dot_class = "ok" if raw_ok else "err"
+            status_text = (
+                f"{credits:,.0f} Discovery credits · {raw:,.0f} raw requests left "
+                f"(shared account — separate pools). This tool used "
+                f"{week['raw_requests']} raw + {week['credits']} credits in 7 days."
+            )
+            if not raw_ok:
+                status_text += " ⚠ Raw pool low/exhausted — request a top-up in #augmentum-modash."
     st.markdown(f"""
     <div class="config-card">
       <div class="config-status-dot {dot_class}"></div>
       <div>
-        <div class="config-label">Modash API Key (MODASH_API_KEY)</div>
+        <div class="config-label">Modash — credits &amp; raw requests</div>
         <div class="config-value">{status_text}</div>
       </div>
     </div>

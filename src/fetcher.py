@@ -22,9 +22,20 @@ logger = logging.getLogger(__name__)
 _NON_PROFILE_PATHS = {"p", "reel", "reels", "tv", "explore", "accounts", "stories"}
 
 
+def _log_usage(api: str, endpoint: str, username: str = "", credits=None):
+	"""Best-effort consumption logging — never breaks a fetch."""
+	try:
+		from .modash_usage import log_request
+		log_request(api, endpoint, username, credits)
+	except Exception:
+		pass
+
+
 class ModashCreditsExhausted(RuntimeError):
 	"""Raised when Modash returns not_enough_credits — the run must stop
-	loudly instead of silently marking every creator as fetch_failed."""
+	loudly instead of silently marking every creator as fetch_failed.
+	NOTE: the two Modash pools are separate — raw requests can be exhausted
+	while Discovery credits remain (and vice versa)."""
 
 
 def _check_credits(resp) -> None:
@@ -138,6 +149,7 @@ class ModashFetcher:
 				)
 				_check_credits(profile_resp)
 				profile_resp.raise_for_status()
+				_log_usage("raw", "user-info", username)
 				profile_data = profile_resp.json()
 
 				# Fetch reels (first page is enough for up to 12 reels)
@@ -147,6 +159,7 @@ class ModashFetcher:
 					timeout=10,
 				)
 				reels_resp.raise_for_status()
+				_log_usage("raw", "user-reels", username)
 				reels_data = reels_resp.json()
 
 				# Normalize and store
@@ -257,6 +270,7 @@ class ModashFetcher:
 				timeout=15,
 			)
 			resp.raise_for_status()
+			_log_usage("raw", "media-comments", f"post:{code}")
 			comments = resp.json().get("comments") or []
 			texts = []
 			for c in comments[:max_comments]:
@@ -289,6 +303,7 @@ class ModashFetcher:
 				timeout=30,
 			)
 			resp.raise_for_status()
+			_log_usage("discovery", "report", username, credits=1.0)
 			profile = resp.json().get("profile") or {}
 			audience = profile.get("audience") or {}
 			geo = [
